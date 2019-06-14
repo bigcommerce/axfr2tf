@@ -1,0 +1,10 @@
+[package]
+name = "axfr2tf"
+version = "0.1.0"
+authors = ["Zack Angelo <zackangelo@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+trust-dns = "0.16.1"
+itertools = "0.8.0"
+clap = "2.33.0"
