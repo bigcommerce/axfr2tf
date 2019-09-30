@@ -5,33 +5,40 @@ fn write_record_data<'a, W: Write, I: Iterator<Item = &'a RData>>(
     rrdatas: I, 
     out: &mut W) -> io::Result<()> { 
 
-    write!(out, "\trrdatas = [ \n")?; 
+    write!(out, "  rrdatas = [\n")?; 
     
     for d in rrdatas { 
         (match d {
             RData::A(ip) => { 
-                write!(out, "\t\t\"{:?}\",\n", ip)?;
+                write!(out, "    \"{:?}\",\n", ip)?;
                 Ok::<(), io::Error>(())
             }
             RData::MX(mx) => { 
-                write!(out, "\t\t\"{} {}\",\n", mx.preference(), mx.exchange())?;
+                write!(out, "    \"{} {}\",\n", mx.preference(), mx.exchange())?;
                 Ok::<(), io::Error>(())
             }
             RData::CNAME(name) => {
-                write!(out, "\t\t\"{}\",\n", name)?;
+                write!(out, "    \"{}\",\n", name)?;
+                Ok::<(), io::Error>(())
+            }
+            RData::NS(name) => { 
+                write!(out, "    \"{}\",\n", name)?;
                 Ok::<(), io::Error>(())
             }
             RData::TXT(txt) => { 
                 let txt_data = txt.txt_data(); 
 
-                write!(out, "\t\t\"")?;
+                write!(out, "    \"")?;
 
                 for txt_block in txt_data {
+                    let contains_space = txt_block.contains(&b' '); 
                     let mut txt = Vec::new(); 
                     let mut i: u32 = 0;
-                    
-                    txt.push('\\');
-                    txt.push('"');
+
+                    if contains_space { 
+                        txt.push('\\');
+                        txt.push('"');
+                    }
 
                     for c in txt_block.into_iter() { 
 
@@ -49,7 +56,7 @@ fn write_record_data<'a, W: Write, I: Iterator<Item = &'a RData>>(
                         }
 
                         match c { 
-                            &c if c == b'"' => { 
+                            &c if (c as char) == '"' => { 
                                 txt.push('\\');
                                 txt.push('"');
                             }
@@ -59,8 +66,10 @@ fn write_record_data<'a, W: Write, I: Iterator<Item = &'a RData>>(
                         i += 1;
                     }
 
-                    txt.push('\\');
-                    txt.push('"');
+                    if contains_space { 
+                        txt.push('\\');
+                        txt.push('"');
+                    }
 
                     write!(out,"{}",txt.into_iter().collect::<String>())?; 
                 }
@@ -73,7 +82,7 @@ fn write_record_data<'a, W: Write, I: Iterator<Item = &'a RData>>(
         })?;
     }
 
-    write!(out, "\t]\n")?;
+    write!(out, "  ]\n")?;
 
     Ok(())
 }
@@ -85,8 +94,10 @@ fn record_resource_name(record_name: &Name, record_type: &RecordType) -> String 
     if record_name_str.ends_with("_") { 
         record_name_str.pop();
     } 
-    
-    format!("{}_{}", record_name_str, record_type)
+
+    record_name_str = record_name_str.replace("*", "star"); 
+
+    format!("dns_{}_{}", record_name_str, record_type)
 }
 
 fn write_record_info<'a, W: Write,I: Iterator<Item = &'a Record>>(
@@ -101,10 +112,10 @@ fn write_record_info<'a, W: Write,I: Iterator<Item = &'a Record>>(
     let type_str: &str = (*record_type).into(); 
 
     write!(out, "resource \"google_dns_record_set\" \"{}\" {{\n", record_resource_name)?; 
-    write!(out, "\tname = \"{}\"\n", record_name)?;
-    write!(out, "\tmanaged_zone = \"${{google_dns_managed_zone.{}.name}}\"\n", zone_resource)?;
-    write!(out, "\ttype = \"{}\"\n", type_str)?;
-    write!(out, "\tttl = {}\n", record_ttl)?;
+    write!(out, "  name = \"{}\"\n", record_name)?;
+    write!(out, "  managed_zone = google_dns_managed_zone.{}.name\n", zone_resource)?;
+    write!(out, "  type = \"{}\"\n", type_str)?;
+    write!(out, "  ttl = {}\n", record_ttl)?;
 
     let rrdatas = rs.map(|r| r.rdata());
 
@@ -116,6 +127,7 @@ fn write_record_info<'a, W: Write,I: Iterator<Item = &'a Record>>(
 }
 
 pub fn write_record<'a, W: Write, I: Iterator<Item = &'a Record>>(
+    zone_dns_name: &Name,
     zone_tf_resource: String, 
     rs: &mut I, 
     out: &mut W) -> io::Result<()> {
@@ -127,17 +139,23 @@ pub fn write_record<'a, W: Write, I: Iterator<Item = &'a Record>>(
         (r.record_type(), r.name(), r.ttl())
     };
 
-    match record_type { 
-        RecordType::A | RecordType::CNAME | RecordType::TXT | RecordType::MX => { 
-            write_record_info(
-                zone_tf_resource,
-                &record_type,
-                record_name,
-                record_ttl,
-                records.into_iter(),
-                out
-            )
-        }
-        _ => Ok(())
-    }
+    let should_write_record = 
+        match record_type { 
+            RecordType::A | RecordType::CNAME | RecordType::TXT | RecordType::MX => true,
+            RecordType::NS if record_name != zone_dns_name => true,
+            _ => false,
+        };
+
+    if should_write_record { 
+        write_record_info(
+            zone_tf_resource,
+            &record_type,
+            record_name,
+            record_ttl,
+            records.into_iter(),
+            out
+        )
+    } else { 
+        Ok(())
+    }   
 }
